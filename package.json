@@ -1,0 +1,22 @@
+{
+  "name": "heuristic",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI-powered job application co-pilot",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev:api": "pnpm --filter @heuristic/api dev",
+    "dev:web": "pnpm --filter @heuristic/web dev",
+    "dev": "pnpm -r --parallel --filter='./apps/*' dev",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f postgres",
+    "db:migrate": "pnpm --filter @heuristic/api prisma migrate dev",
+    "db:studio": "pnpm --filter @heuristic/api prisma studio",
+    "db:seed": "pnpm --filter @heuristic/api prisma db seed",
+    "ollama:pull": "ollama pull qwen2.5:3b"
+  }
+}
