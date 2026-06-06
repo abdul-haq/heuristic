@@ -14,6 +14,8 @@ import { PrismaService } from '../prisma/prisma.module';
 import { LLMService, EmbeddingsService } from '../llm/llm.module';
 import { BulletsService } from '../bullets/bullets.module';
 import { JwtAuthGuard, CurrentUser } from '../auth/auth.module';
+import { LlmModule } from '../llm/llm.module';
+import { BulletsModule } from '../bullets/bullets.module';
 
 // ---------- DTOs ----------
 
@@ -212,7 +214,9 @@ export class JdsController {
 
 // ---------- Module ----------
 
+
 @Module({
+  imports: [LlmModule, BulletsModule],
   controllers: [JdsController],
   providers: [JdsService],
 })

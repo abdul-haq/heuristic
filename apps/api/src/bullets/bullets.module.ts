@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.module';
 import { EmbeddingsService } from '../llm/llm.module';
 import { JwtAuthGuard, CurrentUser } from '../auth/auth.module';
+import { LlmModule } from '../llm/llm.module';
 
 @Injectable()
 export class BulletsService {
@@ -78,6 +79,7 @@ export class BulletsController {
 }
 
 @Module({
+  imports: [LlmModule],
   controllers: [BulletsController],
   providers: [BulletsService],
   exports: [BulletsService],
