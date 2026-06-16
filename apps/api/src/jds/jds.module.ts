@@ -67,7 +67,7 @@ export class JdsService {
     private llm: LLMService,
     private embeddings: EmbeddingsService,
     private bullets: BulletsService,
-  ) {}
+  ) { }
 
   async capture(userId: string, dto: CaptureJDDto) {
     // 1. LLM extracts structured fields
@@ -191,15 +191,83 @@ export class JdsService {
   }
 
   async updateStatus(userId: string, id: string, status: string) {
-  // First, verify the user owns this JD (same as delete)
-  const jd = await this.get(userId, id);
-  
-  // Update the status in the database
-  return this.prisma.jobDescription.update({
-    where: { id },
-    data: { status },
-  });
-}
+    const jd = await this.get(userId, id);
+    return this.prisma.jobDescription.update({
+      where: { id },
+      data: { status },
+    });
+  }
+
+  async analyze(userId: string, jdId: string) {
+    const jd = await this.get(userId, jdId);
+    const extracted = (jd.extracted as any) ?? {};
+
+    // 1. Get user's bullets with their skills
+    const bullets = await this.bullets.listForUser(userId);
+    const userSkills = [...new Set(bullets.flatMap((b: any) => b.skills ?? []))];
+
+    // 2. Keyword matching
+    const mustHaves: string[] = extracted.mustHaves ?? [];
+    const niceToHaves: string[] = extracted.niceToHaves ?? [];
+
+    const matchedMust = mustHaves.filter((skill: string) =>
+      userSkills.some((s: string) => skill.toLowerCase().includes(s) || s.includes(skill.toLowerCase()))
+    );
+    const missingMust = mustHaves.filter((skill: string) => !matchedMust.includes(skill));
+
+    const matchedNice = niceToHaves.filter((skill: string) =>
+      userSkills.some((s: string) => skill.toLowerCase().includes(s) || s.includes(skill.toLowerCase()))
+    );
+
+    // 3. Cosine similarity score (0-100)
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ embedding: string }>>(
+      `SELECT embedding::text FROM "JobDescription" WHERE id = $1`,
+      jdId,
+    );
+    let semanticScore = 0;
+    if (rows[0]?.embedding) {
+      const jdEmbedding = JSON.parse(rows[0].embedding) as number[];
+      const topBullets = await this.bullets.retrieveTopKForJD(userId, jdEmbedding, 6);
+      if (topBullets.length > 0) {
+        const avgDistance = topBullets.reduce((sum, b) => sum + b.distance, 0) / topBullets.length;
+        semanticScore = Math.round((1 - avgDistance / 2) * 100);
+      }
+    }
+
+    // 4. Keyword coverage score
+    const totalKeywords = mustHaves.length + niceToHaves.length;
+    const matchedKeywords = matchedMust.length + matchedNice.length;
+    const keywordScore = totalKeywords > 0 ? Math.round((matchedKeywords / totalKeywords) * 100) : 0;
+
+    // 5. Combined match score (weighted: 60% semantic, 40% keyword)
+    const matchScore = Math.round(semanticScore * 0.6 + keywordScore * 0.4);
+
+    // 6. Red flags
+    const redFlags: string[] = [];
+    const germanLevel = extracted.germanLevel;
+    if (germanLevel && germanLevel !== 'none' && germanLevel !== 'a1' && germanLevel !== 'a2') {
+      redFlags.push(`Requires German ${germanLevel.toUpperCase()} (you have A2)`);
+    }
+    if (extracted.workFormat === 'fulltime') {
+      redFlags.push('This is a full-time role, not Werkstudent');
+    }
+
+    // 7. Update the match score in the database
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE "JobDescription" SET "updatedAt" = NOW() WHERE id = $1`,
+      jdId,
+    );
+
+    return {
+      matchScore,
+      semanticScore,
+      keywordScore,
+      matched: { mustHaves: matchedMust, niceToHaves: matchedNice },
+      missing: { mustHaves: missingMust },
+      redFlags,
+      userSkills,
+    };
+  }
 }
 
 // ---------- Controller ----------
@@ -207,7 +275,7 @@ export class JdsService {
 @UseGuards(JwtAuthGuard)
 @Controller('jds')
 export class JdsController {
-  constructor(private service: JdsService) {}
+  constructor(private service: JdsService) { }
 
   @Post()
   capture(@CurrentUser() user: { id: string }, @Body() dto: CaptureJDDto) {
@@ -217,6 +285,11 @@ export class JdsController {
   @Get()
   list(@CurrentUser() user: { id: string }) {
     return this.service.list(user.id);
+  }
+
+  @Get(':id/analyze')
+  analyze(@CurrentUser() user: { id: string }, @Param('id') id: string) {
+    return this.service.analyze(user.id, id);
   }
 
   @Get(':id')
@@ -236,12 +309,12 @@ export class JdsController {
 
   @Patch(':id/status')
   updateStatus(
-  @CurrentUser() user: { id: string },
-  @Param('id') id: string,
-  @Body() body: { status: string },
-) {
-  return this.service.updateStatus(user.id, id, body.status);
-}
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Body() body: { status: string },
+  ) {
+    return this.service.updateStatus(user.id, id, body.status);
+  }
 }
 
 // ---------- Module ----------
@@ -252,4 +325,4 @@ export class JdsController {
   controllers: [JdsController],
   providers: [JdsService],
 })
-export class JdsModule {}
+export class JdsModule { }
