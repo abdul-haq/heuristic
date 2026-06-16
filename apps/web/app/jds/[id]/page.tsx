@@ -57,6 +57,10 @@ export default function JdDetailPage() {
   const [loadingAnalysis, setLoadingAnalysis] = useState(false);
   const [loadingRewrites, setLoadingRewrites] = useState(false);
   const [accepted, setAccepted] = useState<Record<string, boolean>>({});
+  const [coverLetter, setCoverLetter] = useState<string | null>(null);
+  const [loadingLetter, setLoadingLetter] = useState(false);
+  const [copied, setCopied] = useState(false);
+
 
   useEffect(() => {
     api<JD>(`/jds/${id}`).then(setJd).catch(console.error);
@@ -80,6 +84,25 @@ export default function JdDetailPage() {
     } finally {
       setLoadingRewrites(false);
     }
+  }
+
+  async function generateCoverLetter() {
+    setLoadingLetter(true);
+    try {
+      const res = await api<{ coverLetter: string }>(`/jds/${id}/cover-letter`, { method: 'POST' });
+      setCoverLetter(res.coverLetter);
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setLoadingLetter(false);
+    }
+  }
+
+  function copyToClipboard() {
+    if (!coverLetter) return;
+    navigator.clipboard.writeText(coverLetter);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   if (!jd) {
@@ -242,6 +265,54 @@ export default function JdDetailPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Cover letter section */}
+      <div className="flex items-center justify-between pt-4 border-t border-neutral-200">
+        <h2 className="text-sm font-medium">Cover letter</h2>
+        <button
+          onClick={generateCoverLetter}
+          disabled={loadingLetter}
+          className="bg-neutral-900 text-white rounded px-4 py-2 text-sm disabled:opacity-50"
+        >
+          {loadingLetter ? 'Drafting...' : coverLetter ? 'Regenerate' : 'Generate cover letter'}
+        </button>
+      </div>
+
+      {loadingLetter && (
+        <div className="bg-white border border-neutral-200 rounded-lg p-6 animate-pulse">
+          <div className="space-y-3">
+            <div className="h-3 bg-neutral-200 rounded w-3/4" />
+            <div className="h-3 bg-neutral-200 rounded w-full" />
+            <div className="h-3 bg-neutral-200 rounded w-5/6" />
+            <div className="h-3 bg-neutral-100 rounded w-0" />
+            <div className="h-3 bg-neutral-200 rounded w-full" />
+            <div className="h-3 bg-neutral-200 rounded w-2/3" />
+          </div>
+          <p className="text-xs text-neutral-500 animate-pulse mt-4">
+            Drafting cover letter — takes 30-60 seconds...
+          </p>
+        </div>
+      )}
+
+      {coverLetter && !loadingLetter && (
+        <div className="bg-white border border-neutral-200 rounded-lg p-6">
+          <div className="flex justify-end gap-2 mb-4">
+            <button
+              onClick={copyToClipboard}
+              className="text-xs px-3 py-1.5 border border-neutral-300 rounded hover:border-neutral-400"
+            >
+              {copied ? '✓ Copied' : 'Copy to clipboard'}
+            </button>
+          </div>
+          <div className="prose prose-sm max-w-none">
+            {coverLetter.split('\n').map((line, i) => (
+              <p key={i} className={`text-sm leading-relaxed ${line.trim() === '' ? 'h-4' : ''}`}>
+                {line}
+              </p>
+            ))}
+          </div>
         </div>
       )}
     </main>

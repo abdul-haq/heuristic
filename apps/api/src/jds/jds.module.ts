@@ -58,6 +58,19 @@ Rules:
 - Keep the rewrite under 25 words.
 - Return ONLY the rewritten bullet, no preamble, no quotes.`;
 
+const COVER_LETTER_SYSTEM = `You write short, professional cover letters for job applications.
+
+Rules:
+- Use ONLY facts from the provided CV bullets. Never invent experience.
+- Keep it to 4 paragraphs: opening, relevant experience, why this company, closing.
+- Total length: 150-250 words.
+- Tone: professional but warm, not robotic.
+- If the JD is in German, write the letter in German using formal Sie and proper business conventions (Sehr geehrte Damen und Herren, Mit freundlichen Grüßen).
+- If the JD is in English, write in English.
+- Do not use clichés like "I am writing to express my interest" or "Ich bewerbe mich hiermit".
+- Reference specific requirements from the JD and match them to specific experience from the CV.
+- End with availability (mention Werkstudent 15-20h/week if the role is a Werkstudent position).`;
+
 // ---------- Service ----------
 
 @Injectable()
@@ -268,6 +281,63 @@ export class JdsService {
       userSkills,
     };
   }
+
+  async generateCoverLetter(userId: string, jdId: string) {
+    const jd = await this.get(userId, jdId);
+    const extracted = (jd.extracted as any) ?? {};
+
+    // Get the user's top matching bullets for context
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ embedding: string }>>(
+      `SELECT embedding::text FROM "JobDescription" WHERE id = $1`,
+      jdId,
+    );
+
+    let relevantBullets: string[] = [];
+    if (rows[0]?.embedding) {
+      const jdEmbedding = JSON.parse(rows[0].embedding) as number[];
+      const topBullets = await this.bullets.retrieveTopKForJD(userId, jdEmbedding, 6);
+      relevantBullets = topBullets.map((b) => `- ${b.text}`);
+    }
+
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+
+    const prompt = `JOB DESCRIPTION:
+    Company: ${extracted.companyName ?? 'Unknown'}
+    Role: ${extracted.roleTitle ?? 'Unknown'}
+    Location: ${jd.location ?? 'Not specified'}
+    Language: ${jd.language ?? 'en'}
+    Work format: ${extracted.workFormat ?? 'unknown'}
+    
+    Full JD text:
+    ${jd.rawText.slice(0, 2000)}
+    
+    CANDIDATE'S RELEVANT CV BULLETS:
+    ${relevantBullets.join('\n')}
+    
+    CANDIDATE INFO:
+    Name: ${user.name ?? 'Abdul Haq'}
+    Currently: M.Sc. student in High Integrity Systems at Frankfurt University of Applied Sciences
+    German level: A2 (improving toward B1)
+    
+    Write a cover letter for this application.`;
+
+    const res = await this.llm.complete({
+      taskType: 'draft_letter',
+      userId,
+      maxTokens: 1000,
+      messages: [
+        { role: 'system', content: COVER_LETTER_SYSTEM },
+        { role: 'user', content: prompt },
+      ],
+    });
+
+    return {
+      coverLetter: res.text.trim(),
+      language: jd.language ?? 'en',
+      model: res.model,
+      provider: res.provider,
+    };
+  }
 }
 
 // ---------- Controller ----------
@@ -290,6 +360,11 @@ export class JdsController {
   @Get(':id/analyze')
   analyze(@CurrentUser() user: { id: string }, @Param('id') id: string) {
     return this.service.analyze(user.id, id);
+  }
+
+  @Post(':id/cover-letter')
+  generateCoverLetter(@CurrentUser() user: { id: string }, @Param('id') id: string) {
+    return this.service.generateCoverLetter(user.id, id);
   }
 
   @Get(':id')
