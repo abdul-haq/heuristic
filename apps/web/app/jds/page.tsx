@@ -13,6 +13,7 @@ interface JD {
   germanLevel: string | null;
   platform: string | null;
   createdAt: string;
+  status?: string;
 }
 
 export default function JdsPage() {
@@ -20,6 +21,37 @@ export default function JdsPage() {
   const [rawText, setRawText] = useState('');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  async function updateStatus(jdId: string, newStatus: string) {
+    setUpdatingId(jdId);
+    try {
+      await api(`/jds/${jdId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: newStatus }),
+      });
+      // Update the local list
+      setJds(jds.map(j => j.id === jdId ? { ...j, status: newStatus } : j));
+    } catch (err: any) {
+      setErr(err.message);
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+  async function deleteJd(jdId: string, e: React.MouseEvent) {
+    e.preventDefault(); // Don't navigate if accidentally clicked while hovering the link
+    setDeletingId(jdId);
+    try {
+      await api(`/jds/${jdId}`, { method: 'DELETE' });
+      // Remove from the UI immediately (optimistic update)
+      setJds(jds.filter(j => j.id !== jdId));
+    } catch (err: any) {
+      setErr(err.message);
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   async function refresh() {
     try {
@@ -72,18 +104,41 @@ export default function JdsPage() {
       <div className="space-y-2">
         {jds.length === 0 && <p className="text-sm text-neutral-500">No JDs yet. Paste one above.</p>}
         {jds.map((jd) => (
-          <Link key={jd.id} href={`/jds/${jd.id}`} className="block bg-white border border-neutral-200 rounded-lg p-4 hover:border-neutral-400">
-            <div className="flex justify-between items-start">
+          <div key={jd.id} className="flex items-center justify-between gap-3 bg-white border border-neutral-200 rounded-lg p-4 hover:border-neutral-400">
+            <Link href={`/jds/${jd.id}`} className="flex-1">
               <div>
                 <p className="font-medium text-sm">{jd.roleTitle ?? 'Untitled role'}</p>
                 <p className="text-xs text-neutral-500">{jd.companyName ?? '?'} · {jd.location ?? '?'}</p>
               </div>
-              <div className="flex gap-2 text-xs text-neutral-500">
-                {jd.language && <span className="uppercase">{jd.language}</span>}
-                {jd.germanLevel && <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded">DE {jd.germanLevel}</span>}
-              </div>
+            </Link>
+            <div className="flex gap-2 text-xs text-neutral-500">
+              {jd.language && <span className="uppercase">{jd.language}</span>}
+              {jd.germanLevel && <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded">DE {jd.germanLevel}</span>}
             </div>
-          </Link>
+
+            {/* Status dropdown */}
+            <select
+              value={jd.status || 'captured'}
+              onChange={(e) => updateStatus(jd.id, e.target.value)}
+              disabled={updatingId === jd.id}
+              className="px-2 py-1.5 text-xs border border-neutral-300 rounded bg-white disabled:opacity-50"
+            >
+              <option value="captured">Captured</option>
+              <option value="applied">Applied</option>
+              <option value="interview">Interview</option>
+              <option value="offer">Offer</option>
+              <option value="rejected">Rejected</option>
+            </select>
+
+            {/* Delete button */}
+            <button
+              onClick={(e) => deleteJd(jd.id, e)}
+              className="px-3 py-1.5 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50"
+              disabled={deletingId === jd.id}
+            >
+              {deletingId === jd.id ? '...' : 'Delete'}
+            </button>
+          </div>
         ))}
       </div>
     </main>

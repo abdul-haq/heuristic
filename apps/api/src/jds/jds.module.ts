@@ -5,6 +5,8 @@ import {
   Post,
   Get,
   Body,
+  Delete,
+  Patch,
   Param,
   UseGuards,
   NotFoundException,
@@ -126,7 +128,7 @@ export class JdsService {
       select: {
         id: true, companyName: true, roleTitle: true, location: true,
         language: true, germanLevel: true, workFormat: true,
-        platform: true, createdAt: true,
+        platform: true, status: true, createdAt: true,
       },
     });
   }
@@ -182,6 +184,22 @@ export class JdsService {
 
     return { jd, rewrites };
   }
+  async delete(userId: string, id: string) {
+    const jd = await this.get(userId, id);
+    await this.prisma.jobDescription.delete({ where: { id } });
+    return { success: true, id };
+  }
+
+  async updateStatus(userId: string, id: string, status: string) {
+  // First, verify the user owns this JD (same as delete)
+  const jd = await this.get(userId, id);
+  
+  // Update the status in the database
+  return this.prisma.jobDescription.update({
+    where: { id },
+    data: { status },
+  });
+}
 }
 
 // ---------- Controller ----------
@@ -210,6 +228,20 @@ export class JdsController {
   suggestRewrites(@CurrentUser() user: { id: string }, @Param('id') id: string) {
     return this.service.suggestRewrites(user.id, id);
   }
+
+  @Delete(':id')
+  delete(@CurrentUser() user: { id: string }, @Param('id') id: string) {
+    return this.service.delete(user.id, id);
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+  @CurrentUser() user: { id: string },
+  @Param('id') id: string,
+  @Body() body: { status: string },
+) {
+  return this.service.updateStatus(user.id, id, body.status);
+}
 }
 
 // ---------- Module ----------

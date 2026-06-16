@@ -95,7 +95,7 @@ model JobDescription {
 
   // Embedding of the JD text for similarity search
   embedding Unsupported("vector(384)")?
-
+  status  String @default("captured") // "captured" | "applied" | "interview" | "offer" | "rejected"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
