@@ -139,3 +139,44 @@ model LLMCall {
   @@index([userId, createdAt])
   @@index([taskType, createdAt])
 }
+model RewriteSet {
+  id        String   @id @default(cuid())
+  userId    String
+  jdId      String
+  provider  String?
+  model     String?
+  createdAt DateTime @default(now())
+
+  items RewriteItem[]
+
+  @@index([userId, jdId, createdAt])
+}
+
+model RewriteItem {
+  id        String  @id @default(cuid())
+  setId     String
+  bulletId  String
+  original  String  @db.Text
+  rewritten String  @db.Text
+  company   String?
+  distance  Float
+  ordering  Int     @default(0)
+  accepted  Boolean @default(false)
+
+  set RewriteSet @relation(fields: [setId], references: [id], onDelete: Cascade)
+
+  @@index([setId])
+}
+
+model CoverLetterGeneration {
+  id        String   @id @default(cuid())
+  userId    String
+  jdId      String
+  language  String
+  content   String   @db.Text
+  provider  String?
+  model     String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, jdId, createdAt])
+}

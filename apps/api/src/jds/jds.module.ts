@@ -159,7 +159,6 @@ export class JdsService {
   async suggestRewrites(userId: string, jdId: string) {
     const jd = await this.get(userId, jdId);
 
-    // Re-embed the JD text (or read stored embedding via raw SQL)
     const rows = await this.prisma.$queryRawUnsafe<Array<{ embedding: string }>>(
       `SELECT embedding::text FROM "JobDescription" WHERE id = $1`,
       jdId,
@@ -167,12 +166,10 @@ export class JdsService {
     if (!rows[0]?.embedding) throw new Error('JD has no embedding');
     const jdEmbedding = JSON.parse(rows[0].embedding) as number[];
 
-    // Retrieve top-K bullets
     const topBullets = await this.bullets.retrieveTopKForJD(userId, jdEmbedding, 6);
 
-    // Ask the LLM to rewrite each one
     const rewrites = await Promise.all(
-      topBullets.map(async (b) => {
+      topBullets.map(async (b, index) => {
         const res = await this.llm.complete({
           taskType: 'rewrite_bullet',
           userId,
@@ -191,11 +188,37 @@ export class JdsService {
           rewritten: res.text.trim(),
           company: b.company,
           distance: b.distance,
+          ordering: index,
+          provider: res.provider,
+          model: res.model,
         };
       }),
     );
 
-    return { jd, rewrites };
+    // Save to database
+    const rewriteSet = await this.prisma.rewriteSet.create({
+      data: {
+        userId,
+        jdId,
+        provider: rewrites[0]?.provider,
+        model: rewrites[0]?.model,
+        items: {
+          create: rewrites.map((r) => ({
+            bulletId: r.bulletId,
+            original: r.original,
+            rewritten: r.rewritten,
+            company: r.company,
+            distance: r.distance,
+            ordering: r.ordering,
+          })),
+        },
+      },
+      include: { items: { orderBy: { ordering: 'asc' } } },
+    });
+
+    await this.cleanupOldGenerations('rewriteSet', userId, jdId);
+
+    return rewriteSet;
   }
   async delete(userId: string, id: string) {
     const jd = await this.get(userId, id);
@@ -286,7 +309,6 @@ export class JdsService {
     const jd = await this.get(userId, jdId);
     const extracted = (jd.extracted as any) ?? {};
 
-    // Get the user's top matching bullets for context
     const rows = await this.prisma.$queryRawUnsafe<Array<{ embedding: string }>>(
       `SELECT embedding::text FROM "JobDescription" WHERE id = $1`,
       jdId,
@@ -331,12 +353,77 @@ export class JdsService {
       ],
     });
 
-    return {
-      coverLetter: res.text.trim(),
-      language: jd.language ?? 'en',
-      model: res.model,
-      provider: res.provider,
-    };
+    // Save to database
+    const saved = await this.prisma.coverLetterGeneration.create({
+      data: {
+        userId,
+        jdId,
+        language: jd.language ?? 'en',
+        content: res.text.trim(),
+        provider: res.provider,
+        model: res.model,
+      },
+    });
+
+    await this.cleanupOldGenerations('coverLetterGeneration', userId, jdId);
+
+    return saved;
+  }
+
+  async getLatestRewriteSet(userId: string, jdId: string) {
+    return this.prisma.rewriteSet.findFirst({
+      where: { userId, jdId },
+      orderBy: { createdAt: 'desc' },
+      include: { items: { orderBy: { ordering: 'asc' } } },
+    });
+  }
+
+  async getRewriteHistory(userId: string, jdId: string) {
+     return this.prisma.rewriteSet.findMany({
+      where: { userId, jdId },
+      orderBy: { createdAt: 'desc' },
+      include: { items: { orderBy: { ordering: 'asc' } } },
+    });
+  }
+
+  async getCoverLetterHistory(userId: string, jdId: string) {
+    return this.prisma.coverLetterGeneration.findMany({
+      where: { userId, jdId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async toggleRewriteItemAccepted(userId: string, itemId: string, accepted: boolean) {
+    const item = await this.prisma.rewriteItem.findUniqueOrThrow({
+      where: { id: itemId },
+      include: { set: true },
+    });
+    if (item.set.userId !== userId) throw new NotFoundException();
+
+    return this.prisma.rewriteItem.update({
+      where: { id: itemId },
+      data: { accepted },
+    });
+  }
+
+  private async cleanupOldGenerations(
+    table: 'rewriteSet' | 'coverLetterGeneration',
+    userId: string,
+    jdId: string,
+    maxVersions = 3,
+  ) {
+    const all = await (this.prisma[table] as any).findMany({
+      where: { userId, jdId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    if (all.length > maxVersions) {
+      const toDelete = all.slice(maxVersions).map((r: any) => r.id);
+      await (this.prisma[table] as any).deleteMany({
+        where: { id: { in: toDelete } },
+      });
+    }
   }
 }
 
@@ -365,6 +452,25 @@ export class JdsController {
   @Post(':id/cover-letter')
   generateCoverLetter(@CurrentUser() user: { id: string }, @Param('id') id: string) {
     return this.service.generateCoverLetter(user.id, id);
+  }
+
+  @Get(':id/rewrites/history')
+  getRewriteHistory(@CurrentUser() user: { id: string }, @Param('id') id: string) {
+    return this.service.getRewriteHistory(user.id, id);
+  }
+
+  @Get(':id/cover-letter/history')
+  getCoverLetterHistory(@CurrentUser() user: { id: string }, @Param('id') id: string) {
+    return this.service.getCoverLetterHistory(user.id, id);
+  }
+
+  @Patch('rewrites/items/:itemId/accept')
+  toggleAccept(
+    @CurrentUser() user: { id: string },
+    @Param('itemId') itemId: string,
+    @Body() body: { accepted: boolean },
+  ) {
+    return this.service.toggleRewriteItemAccepted(user.id, itemId, body.accepted);
   }
 
   @Get(':id')
