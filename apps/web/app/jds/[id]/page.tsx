@@ -1,6 +1,5 @@
 'use client';
 
-import { RewriteCard } from '@/components/jd/RewriteCard';
 import { KeywordPanels } from '@/components/jd/KeywordPanels';
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
@@ -10,15 +9,33 @@ import { JdHeader } from '@/components/jd/JdHeader';
 import { Tabs, type ActiveTab } from '@/components/jd/Tabs';
 import { RewritesTab } from '@/components/jd/RewritesTab';
 import { CoverLetterTab } from '@/components/jd/CoverLetterTab';
+import { VersionSwitcher } from '@/components/jd/VersionSwitcher';
 
 // ---------- Types ----------
-
-interface Rewrite {
+interface RewriteItem {
+  id: string;
   bulletId: string;
   original: string;
   rewritten: string;
   company: string | null;
   distance: number;
+  accepted: boolean;
+}
+
+interface RewriteSet {
+  id: string;
+  createdAt: string;
+  provider: string | null;
+  model: string | null;
+  items: RewriteItem[];
+}
+
+interface CoverLetterGen {
+  id: string;
+  content: string;
+  language: string;
+  provider: string | null;
+  createdAt: string;
 }
 
 interface Analysis {
@@ -60,15 +77,16 @@ export default function JdDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [jd, setJd] = useState<JD | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [rewrites, setRewrites] = useState<Rewrite[] | null>(null);
-  const [coverLetter, setCoverLetter] = useState<string | null>(null);
+  const [rewriteSet, setRewriteSet] = useState<RewriteSet | null>(null);
+  const [coverLetterGen, setCoverLetterGen] = useState<CoverLetterGen | null>(null);
   const [loadingAnalysis, setLoadingAnalysis] = useState(false);
   const [loadingRewrites, setLoadingRewrites] = useState(false);
   const [loadingLetter, setLoadingLetter] = useState(false);
-  const [accepted, setAccepted] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('rewrites');
+  const [rewriteHistory, setRewriteHistory] = useState<RewriteSet[]>([]);
+  const [coverLetterHistory, setCoverLetterHistory] = useState<CoverLetterGen[]>([]);
 
   useEffect(() => {
     api<JD>(`/jds/${id}`).then(setJd).catch(console.error);
@@ -83,12 +101,32 @@ export default function JdDetailPage() {
       .finally(() => setLoadingAnalysis(false));
   }, [jd, id]);
 
+  // Load saved rewrites and cover letter
+  useEffect(() => {
+    if (!jd) return;
+    api<RewriteSet[]>(`/jds/${id}/rewrites/history`)
+      .then((data) => {
+        setRewriteHistory(data ?? []);
+        if (data?.length > 0) setRewriteSet(data[0]); // latest
+      })
+      .catch(console.error);
+    api<CoverLetterGen[]>(`/jds/${id}/cover-letter/history`)
+      .then((data) => {
+        setCoverLetterHistory(data ?? []);
+        if (data?.length > 0) setCoverLetterGen(data[0]); // latest
+      })
+      .catch(console.error);
+  }, [jd, id]);
+
   async function generateRewrites() {
     setActiveTab('rewrites');
     setLoadingRewrites(true);
     try {
-      const res = await api<{ rewrites: Rewrite[] }>(`/jds/${id}/suggest-rewrites`, { method: 'POST' });
-      setRewrites(res.rewrites);
+      const res = await api<RewriteSet>(`/jds/${id}/suggest-rewrites`, { method: 'POST' });
+      setRewriteSet(res);
+      // Refresh history
+      const history = await api<RewriteSet[]>(`/jds/${id}/rewrites/history`);
+      setRewriteHistory(history ?? []);
     } finally {
       setLoadingRewrites(false);
     }
@@ -98,8 +136,11 @@ export default function JdDetailPage() {
     setActiveTab('letter');
     setLoadingLetter(true);
     try {
-      const res = await api<{ coverLetter: string }>(`/jds/${id}/cover-letter`, { method: 'POST' });
-      setCoverLetter(res.coverLetter);
+      const res = await api<CoverLetterGen>(`/jds/${id}/cover-letter`, { method: 'POST' });
+      setCoverLetterGen(res);
+      // Refresh history
+      const history = await api<CoverLetterGen[]>(`/jds/${id}/cover-letter/history`);
+      setCoverLetterHistory(history ?? []);
     } finally {
       setLoadingLetter(false);
     }
@@ -115,9 +156,51 @@ export default function JdDetailPage() {
     }
   }
 
+  function switchRewriteVersion(setId: string) {
+    const found = rewriteHistory.find(s => s.id === setId);
+    if (found) setRewriteSet(found);
+  }
+
+  function switchCoverLetterVersion(genId: string) {
+    const found = coverLetterHistory.find(g => g.id === genId);
+    if (found) setCoverLetterGen(found);
+  }
+
+  async function toggleAccept(itemId: string) {
+    if (!rewriteSet) return;
+    const item = rewriteSet.items.find(i => i.id === itemId);
+    if (!item) return;
+
+    const newAccepted = !item.accepted;
+
+    // Optimistic update
+    setRewriteSet({
+      ...rewriteSet,
+      items: rewriteSet.items.map(i =>
+        i.id === itemId ? { ...i, accepted: newAccepted } : i
+      ),
+    });
+
+    // Persist to server
+    try {
+      await api(`/jds/rewrites/items/${itemId}/accept`, {
+        method: 'PATCH',
+        body: JSON.stringify({ accepted: newAccepted }),
+      });
+    } catch {
+      // Revert on failure
+      setRewriteSet({
+        ...rewriteSet,
+        items: rewriteSet.items.map(i =>
+          i.id === itemId ? { ...i, accepted: !newAccepted } : i
+        ),
+      });
+    }
+  }
+
   function copyToClipboard() {
-    if (!coverLetter) return;
-    navigator.clipboard.writeText(coverLetter);
+    if (!coverLetterGen) return;
+    navigator.clipboard.writeText(coverLetterGen.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -137,9 +220,13 @@ export default function JdDetailPage() {
     );
   }
 
-  const e = jd.extracted ?? {};
   const status = jd.status || 'captured';
-  const acceptedCount = Object.values(accepted).filter(Boolean).length;
+  const rewrites = rewriteSet?.items ?? null;
+  const accepted = Object.fromEntries(
+    (rewriteSet?.items ?? []).map(i => [i.bulletId, i.accepted])
+  );
+  const acceptedCount = (rewriteSet?.items ?? []).filter(i => i.accepted).length;
+  const coverLetter = coverLetterGen?.content ?? null;
 
   return (
     <main className="max-w-4xl mx-auto p-6 space-y-5">
@@ -177,22 +264,46 @@ export default function JdDetailPage() {
       />
 
       {activeTab === 'rewrites' && (
+        <>
+          {rewriteSet && rewriteHistory.length > 1 && (
+            <div className="flex justify-end">
+              <VersionSwitcher
+                versions={rewriteHistory}
+                activeId={rewriteSet.id}
+                onSelect={switchRewriteVersion}
+              />
+            </div>
+          )}
           <RewritesTab
-            rewrites={rewrites}
+            rewrites={rewrites ? rewrites.map(i => ({
+              bulletId: i.id,
+              company: i.company,
+              original: i.original,
+              rewritten: i.rewritten,
+              distance: i.distance,
+            })) : null}
             loading={loadingRewrites}
             onGenerate={generateRewrites}
-            accepted={accepted}
+            accepted={Object.fromEntries(
+              (rewriteSet?.items ?? []).map(i => [i.id, i.accepted])
+            )}
             acceptedCount={acceptedCount}
-            onToggleAccept={(bulletId) =>
-              setAccepted((prev) => ({
-                ...prev,
-                [bulletId]: !prev[bulletId],
-              }))
-            }
+            onToggleAccept={toggleAccept}
           />
+        </>
       )}
 
       {activeTab === 'letter' && (
+        <>
+          {coverLetterGen && coverLetterHistory.length > 1 && (
+            <div className="flex justify-end">
+              <VersionSwitcher
+                versions={coverLetterHistory}
+                activeId={coverLetterGen.id}
+                onSelect={switchCoverLetterVersion}
+              />
+            </div>
+          )}
           <CoverLetterTab
             coverLetter={coverLetter}
             loading={loadingLetter}
@@ -201,6 +312,7 @@ export default function JdDetailPage() {
             copied={copied}
             onCopy={copyToClipboard}
           />
+        </>
       )}
 
     </main>
