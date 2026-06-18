@@ -91,6 +91,10 @@ export default function JdsPage() {
           </div>
           <span className="font-semibold text-lg">Heuristic</span>
         </div>
+        <nav className="flex items-center gap-4 ml-8">
+          <span className="text-sm font-medium text-neutral-900">Dashboard</span>
+          <Link href="/cv" className="text-sm text-neutral-400 hover:text-neutral-700">CV Bullets</Link>
+        </nav>
         <div className="flex items-center gap-3">
           <span className="text-sm text-neutral-500">Abdul</span>
           <div className="w-8 h-8 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-xs font-semibold">AH</div>

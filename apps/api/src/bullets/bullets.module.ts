@@ -3,20 +3,27 @@ import {
   Injectable,
   Controller,
   Get,
-  UseGuards,
+  Post,
+  Delete,
   Param,
+  UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { PrismaService } from '../prisma/prisma.module';
 import { EmbeddingsService } from '../llm/llm.module';
 import { JwtAuthGuard, CurrentUser } from '../auth/auth.module';
 import { LlmModule } from '../llm/llm.module';
+import { CvUploadService } from './cv-upload';
 
 @Injectable()
 export class BulletsService {
   constructor(
     private prisma: PrismaService,
     private embeddings: EmbeddingsService,
-  ) {}
+  ) { }
 
   async listForUser(userId: string) {
     return this.prisma.cVBullet.findMany({
@@ -25,13 +32,8 @@ export class BulletsService {
     });
   }
 
-  /**
-   * Embed a bullet's text and store it. Called when a bullet is created or edited.
-   * pgvector doesn't have a Prisma type so we use raw SQL for the embedding column.
-   */
   async embedAndStore(bulletId: string, text: string) {
     const vec = await this.embeddings.embed(text);
-    // Postgres vector literal format: '[0.1,0.2,...]'
     const literal = `[${vec.join(',')}]`;
     await this.prisma.$executeRawUnsafe(
       `UPDATE "CVBullet" SET embedding = $1::vector WHERE id = $2`,
@@ -40,11 +42,6 @@ export class BulletsService {
     );
   }
 
-  /**
-   * Given a JD embedding, find the top-K most relevant CV bullets via cosine similarity.
-   * pgvector's `<=>` operator returns cosine *distance* (0 = identical, 2 = opposite),
-   * so we order ascending.
-   */
   async retrieveTopKForJD(
     userId: string,
     jdEmbedding: number[],
@@ -65,23 +62,105 @@ export class BulletsService {
       k,
     );
   }
+
+  async deleteBullet(userId: string, bulletId: string) {
+    const bullet = await this.prisma.cVBullet.findFirst({ where: { id: bulletId, userId } });
+    if (!bullet) throw new BadRequestException('Bullet not found');
+    await this.prisma.cVBullet.delete({ where: { id: bulletId } });
+    return { success: true, id: bulletId };
+  }
+
+  async getVariants(userId: string) {
+    return this.prisma.cVVariant.findMany({
+      where: { userId },
+      include: {
+        _count: { select: { bullets: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async deleteAllForUser(userId: string) {
+    const result = await this.prisma.cVBullet.deleteMany({ where: { userId } });
+    return { deleted: result.count };
+  }
+
+  async normalizeCompanyNames(userId: string) {
+    const aliases: Record<string, string> = {
+      'Cigul (formerly Xeon Agency)': 'Cigul',
+      'Xeon Agency': 'Cigul',
+      'Cigul / Xeon Agency': 'Cigul',
+      'Serve Your Taste University Capstone Project': 'Serve Your Taste',
+      'Serve Your Taste Capstone': 'Serve Your Taste',
+    };
+
+    let updated = 0;
+    for (const [from, to] of Object.entries(aliases)) {
+      const result = await this.prisma.cVBullet.updateMany({
+        where: { userId, company: from },
+        data: { company: to },
+      });
+      updated += result.count;
+    }
+    return { updated };
+  }
 }
 
 @UseGuards(JwtAuthGuard)
 @Controller('bullets')
 export class BulletsController {
-  constructor(private service: BulletsService) {}
+  constructor(
+    private service: BulletsService,
+    private cvUpload: CvUploadService,
+  ) { }
 
   @Get()
   list(@CurrentUser() user: { id: string }) {
     return this.service.listForUser(user.id);
+  }
+
+  @Get('variants')
+  variants(@CurrentUser() user: { id: string }) {
+    return this.service.getVariants(user.id);
+  }
+
+   @Delete('all')
+  deleteAll(@CurrentUser() user: { id: string }) {
+    return this.service.deleteAllForUser(user.id);
+  }
+
+  @Post('normalize')
+  normalize(@CurrentUser() user: { id: string }) {
+    return this.service.normalizeCompanyNames(user.id);
+  }
+
+  @Delete(':id')
+  deleteBullet(@CurrentUser() user: { id: string }, @Param('id') id: string) {
+    return this.service.deleteBullet(user.id, id);
+  }
+
+  @Post('upload-cv')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadCv(
+    @CurrentUser() user: { id: string },
+    @UploadedFile() file: any,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (file.mimetype !== 'application/pdf') {
+      throw new BadRequestException('Only PDF files are supported');
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      throw new BadRequestException('File must be under 5MB');
+    }
+
+    return this.cvUpload.processUpload(user.id, file.buffer);
   }
 }
 
 @Module({
   imports: [LlmModule],
   controllers: [BulletsController],
-  providers: [BulletsService],
+  providers: [BulletsService, CvUploadService],
   exports: [BulletsService],
 })
-export class BulletsModule {}
+export class BulletsModule { }
