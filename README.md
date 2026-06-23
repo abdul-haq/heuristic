@@ -232,12 +232,6 @@ heuristic/
 
 ---
 
-## Screenshots
-
-*TODO: Add after deployment*
-
----
-
 ## License
 
 MIT
