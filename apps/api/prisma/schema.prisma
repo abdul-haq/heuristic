@@ -21,6 +21,7 @@ model User {
   email        String   @unique
   passwordHash String
   name         String?
+  cvTemplate   String?  @db.Text
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

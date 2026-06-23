@@ -38,6 +38,12 @@ interface CoverLetterGen {
   createdAt: string;
 }
 
+interface CompileResult {
+  latex: string;
+  plainText: string;
+  bulletCount: number;
+}
+
 interface Analysis {
   matchScore: number;
   semanticScore: number;
@@ -87,6 +93,9 @@ export default function JdDetailPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('rewrites');
   const [rewriteHistory, setRewriteHistory] = useState<RewriteSet[]>([]);
   const [coverLetterHistory, setCoverLetterHistory] = useState<CoverLetterGen[]>([]);
+  const [compilingCv, setCompilingCv] = useState(false);
+  const [compiledCv, setCompiledCv] = useState<CompileResult | null>(null);
+  const [compileError, setCompileError] = useState<string | null>(null);
 
   useEffect(() => {
     api<JD>(`/jds/${id}`).then(setJd).catch(console.error);
@@ -205,6 +214,75 @@ export default function JdDetailPage() {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  function downloadTextFile(filename: string, content: string, mimeType: string) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function compileTailoredCv() {
+    if (!jd) return;
+
+    setCompilingCv(true);
+    setCompileError(null);
+
+    try {
+      const result = await api<CompileResult>(`/bullets/compile/${id}`, {
+        method: 'POST',
+      });
+
+      setCompiledCv(result);
+
+      const roleSlug = (jd.roleTitle ?? 'tailored-cv')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+
+      const companySlug = (jd.companyName ?? 'company')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+
+      downloadTextFile(
+        `${companySlug}-${roleSlug || 'tailored-cv'}.tex`,
+        result.latex,
+        'application/x-tex;charset=utf-8',
+      );
+    } catch (err) {
+      setCompileError(err instanceof Error ? err.message : 'Failed to compile tailored CV');
+    } finally {
+      setCompilingCv(false);
+    }
+  }
+
+  function downloadCompiledPlainText() {
+    if (!compiledCv || !jd) return;
+
+    const roleSlug = (jd.roleTitle ?? 'tailored-cv')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    const companySlug = (jd.companyName ?? 'company')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    downloadTextFile(
+      `${companySlug}-${roleSlug || 'tailored-cv'}.txt`,
+      compiledCv.plainText,
+      'text/plain;charset=utf-8',
+    );
+  }
+
   if (!jd) {
     return (
       <main className="max-w-4xl mx-auto p-6">
@@ -290,6 +368,51 @@ export default function JdDetailPage() {
             acceptedCount={acceptedCount}
             onToggleAccept={toggleAccept}
           />
+
+          {rewrites && rewrites.length > 0 && (
+            <div className="bg-white border border-neutral-200 rounded-xl p-4 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-neutral-900">
+                  Ready to compile your tailored CV
+                </p>
+                <p className="text-xs text-neutral-500 mt-1">
+                  Uses your accepted rewrites. If none are accepted, the backend falls back to all rewrites.
+                </p>
+
+                {compileError && (
+                  <p className="text-xs text-red-600 mt-2">
+                    {compileError}
+                  </p>
+                )}
+
+                {compiledCv && !compileError && (
+                  <p className="text-xs text-emerald-700 mt-2">
+                    Compiled {compiledCv.bulletCount} tailored bullets.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {compiledCv && (
+                  <button
+                    onClick={downloadCompiledPlainText}
+                    className="text-xs text-neutral-500 hover:text-neutral-700 px-3 py-2 border border-neutral-200 rounded-lg"
+                  >
+                    Plain text
+                  </button>
+                )}
+
+                <button
+                  onClick={compileTailoredCv}
+                  disabled={compilingCv}
+                  className="bg-neutral-900 text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-neutral-800 transition-colors disabled:opacity-50"
+                >
+                  {compilingCv ? 'Compiling...' : 'Download tailored .tex'}
+                </button>
+              </div>
+            </div>
+          )}
+
         </>
       )}
 

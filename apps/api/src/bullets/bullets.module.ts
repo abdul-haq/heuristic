@@ -6,6 +6,7 @@ import {
   Post,
   Delete,
   Param,
+  Body,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -17,13 +18,14 @@ import { EmbeddingsService } from '../llm/llm.module';
 import { JwtAuthGuard, CurrentUser } from '../auth/auth.module';
 import { LlmModule } from '../llm/llm.module';
 import { CvUploadService } from './cv-upload';
+import { CvCompilerService } from './cv-compiler';
 
 @Injectable()
 export class BulletsService {
   constructor(
     private prisma: PrismaService,
     private embeddings: EmbeddingsService,
-  ) { }
+  ) {}
 
   async listForUser(userId: string) {
     return this.prisma.cVBullet.findMany({
@@ -112,7 +114,8 @@ export class BulletsController {
   constructor(
     private service: BulletsService,
     private cvUpload: CvUploadService,
-  ) { }
+    private cvCompiler: CvCompilerService,
+  ) {}
 
   @Get()
   list(@CurrentUser() user: { id: string }) {
@@ -124,7 +127,28 @@ export class BulletsController {
     return this.service.getVariants(user.id);
   }
 
-   @Delete('all')
+  @Post('template')
+  saveTemplate(
+    @CurrentUser() user: { id: string },
+    @Body() body: { template: string },
+  ) {
+    return this.cvCompiler.saveTemplate(user.id, body.template);
+  }
+
+  @Get('template')
+  getTemplate(@CurrentUser() user: { id: string }) {
+    return this.cvCompiler.getTemplate(user.id);
+  }
+
+  @Post('compile/:jdId')
+  compileCv(
+    @CurrentUser() user: { id: string },
+    @Param('jdId') jdId: string,
+  ) {
+    return this.cvCompiler.compileTailoredCV(user.id, jdId);
+  }
+
+  @Delete('all')
   deleteAll(@CurrentUser() user: { id: string }) {
     return this.service.deleteAllForUser(user.id);
   }
@@ -132,11 +156,6 @@ export class BulletsController {
   @Post('normalize')
   normalize(@CurrentUser() user: { id: string }) {
     return this.service.normalizeCompanyNames(user.id);
-  }
-
-  @Delete(':id')
-  deleteBullet(@CurrentUser() user: { id: string }, @Param('id') id: string) {
-    return this.service.deleteBullet(user.id, id);
   }
 
   @Post('upload-cv')
@@ -155,12 +174,17 @@ export class BulletsController {
 
     return this.cvUpload.processUpload(user.id, file.buffer);
   }
+
+  @Delete(':id')
+  deleteBullet(@CurrentUser() user: { id: string }, @Param('id') id: string) {
+    return this.service.deleteBullet(user.id, id);
+  }
 }
 
 @Module({
   imports: [LlmModule],
   controllers: [BulletsController],
-  providers: [BulletsService, CvUploadService],
+  providers: [BulletsService, CvUploadService, CvCompilerService],
   exports: [BulletsService],
 })
-export class BulletsModule { }
+export class BulletsModule {}
